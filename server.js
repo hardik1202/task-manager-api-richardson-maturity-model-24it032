@@ -1,4 +1,8 @@
 const express = require('express');
+const mongoose = require('mongoose');
+require('dotenv').config();
+const Task = require('./models/Task');
+
 const app = express();
 
 app.use(express.json());
@@ -15,66 +19,98 @@ app.use((req, res, next) => {
   next();
 });
 
-let tasks = [];
-let nextId = 1;
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch((err) => console.error('MongoDB connection error:', err));
 
-const validateId = (req, res, next) => {
-  if (isNaN(parseInt(req.params.id))) {
-    return res.status(400).json({ error: 'Invalid task ID format' });
+// GET all tasks
+app.get('/tasks', async (req, res, next) => {
+  try {
+    const tasks = await Task.find();
+    res.status(200).json(tasks);
+  } catch (err) {
+    next(err);
   }
-  next();
-};
-
-app.get('/tasks', (req, res) => {
-  res.status(200).json(tasks);
 });
 
-app.post('/tasks', (req, res) => {
-  const title = req.body?.title;
-  if (!title) {
-    return res.status(400).json({ error: 'Title is required' });
+// GET single task by ID
+app.get('/tasks/:id', async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    res.status(200).json(task);
+  } catch (err) {
+    if (err.name === 'CastError') {
+      return res.status(400).json({ error: 'Invalid task ID format' });
+    }
+    next(err);
   }
-  const newTask = { id: nextId++, title, completed: false };
-  tasks.push(newTask);
-  res.status(201).json(newTask);
 });
 
-app.put('/tasks/:id', validateId, (req, res) => {
-  const task = tasks.find(t => t.id === parseInt(req.params.id));
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
+// CREATE a task
+app.post('/tasks', async (req, res, next) => {
+  try {
+    const newTask = await Task.create(req.body);
+    res.status(201).json(newTask);
+  } catch (err) {
+    next(err);
   }
-  Object.assign(task, req.body);
-  res.status(200).json(task);
 });
 
-app.delete('/tasks/:id', validateId, (req, res) => {
-  const index = tasks.findIndex(t => t.id === parseInt(req.params.id));
-  if (index === -1) {
-    return res.status(404).json({ error: 'Task not found' });
+// UPDATE a task
+app.put('/tasks/:id', async (req, res, next) => {
+  try {
+    const updatedTask = await Task.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+    if (!updatedTask) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    res.status(200).json(updatedTask);
+  } catch (err) {
+    if (err.name === 'CastError') {
+      return res.status(400).json({ error: 'Invalid task ID format' });
+    }
+    next(err);
   }
-  tasks.splice(index, 1);
-  res.status(200).json({ message: 'Task deleted' });
 });
 
+// DELETE a task
+app.delete('/tasks/:id', async (req, res, next) => {
+  try {
+    const deletedTask = await Task.findByIdAndDelete(req.params.id);
+    if (!deletedTask) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    res.status(200).json({ message: 'Task deleted' });
+  } catch (err) {
+    if (err.name === 'CastError') {
+      return res.status(400).json({ error: 'Invalid task ID format' });
+    }
+    next(err);
+  }
+});
+
+// 404 handler for unmatched routes
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// Global error handler — turns Mongoose errors into clean structured JSON
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong' });
-});
 
-app.get('/tasks', (req, res) => {
-  const tasksWithLinks = tasks.map(t => ({
-    ...t,
-    _links: {
-      self: `/tasks/${t.id}`,
-      delete: `/tasks/${t.id}`
-    }
-  }));
-  res.status(200).json(tasksWithLinks);
+  if (err.name === 'ValidationError') {
+    const errors = Object.values(err.errors).map((e) => e.message);
+    return res.status(400).json({ error: 'Validation failed', details: errors });
+  }
+
+  res.status(500).json({ error: 'Something went wrong' });
 });
 
 app.listen(5000, () => console.log('Server running on port 5000'));
